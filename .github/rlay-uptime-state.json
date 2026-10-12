@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "healthy": true,
+  "notifiedHealthy": true,
+  "checks": {
+    "website": true,
+    "billing": true,
+    "download": true
+  },
+  "lastCheckedAt": "2026-10-12T22:41:24.983284+00:00",
+  "budgetDay": "2026-10-12",
+  "attempts": 0,
+  "pending": null,
+  "testReserved": false,
+  "lastEmail": null
+}
