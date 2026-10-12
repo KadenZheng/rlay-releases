@@ -11,70 +11,227 @@ on:
         type: boolean
         default: false
 
-permissions: {}
+permissions:
+  contents: write
 concurrency:
   group: rlay-uptime
   cancel-in-progress: false
 
 jobs:
   public-health:
-    # Private repositories can incur runner charges. Refuse before allocating a runner.
+    # Standard public-repository runners only; no caches, artifacts or paid services.
     if: github.repository == 'KadenZheng/rlay-releases' && github.event.repository.private == false
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     env:
       ALERT_DRILL: ${{ inputs.alert_drill || false }}
+      GITHUB_TOKEN: ${{ github.token }}
+      RLAY_UPTIME_RESEND_KEY: ${{ secrets.RLAY_UPTIME_RESEND_KEY }}
     steps:
-      - name: Check public website, closed checkout and signed download
+      - name: Check availability and notify only on changes
         shell: python
         run: |
-          import concurrent.futures, json, os, ssl, time, urllib.request
-
-          if os.environ.get('ALERT_DRILL') == 'true':
-              raise SystemExit('TEST ONLY: intentional failure to verify monitoring alerts. No outage or payment occurred.')
-
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self, *args):
-                  return None
-
-          client = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
-          sha = '68877a2d7473338c267a8210416404081082e0c727743fdfa53b833e27662887'
-          checks = [
+          """Bounded public probes and private alert delivery; standard library only."""
+          import base64
+          import concurrent.futures
+          import datetime as dt
+          import hashlib
+          import json
+          import os
+          import ssl
+          import time
+          import urllib.error
+          import urllib.request
+          
+          REPOSITORY = 'KadenZheng/rlay-releases'
+          STATE_PATH = '.github/rlay-uptime-state.json'
+          CHECKS = (
               ('website', 'https://tryrlay.com/', 'GET'),
               ('billing', 'https://tryrlay.com/billing/health', 'GET'),
               ('download', 'https://downloads.tryrlay.com/releases/0.3.1/arm64/Relay-notarized.zip', 'HEAD'),
-          ]
-
+          )
+          DOWNLOAD_BYTES = '46256139'
+          DOWNLOAD_SHA = '68877a2d7473338c267a8210416404081082e0c727743fdfa53b833e27662887'
+          
+          
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+          
+          
+          CLIENT = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+          
+          
+          def request(url, method='GET', data=None, headers=None, limit=16384):
+              with CLIENT.open(urllib.request.Request(url, data=data, method=method, headers=headers or {}), timeout=10) as response:
+                  body = response.read(limit + 1)
+                  if len(body) > limit:
+                      raise ValueError('Response exceeds limit')
+                  return response, body
+          
+          
           def check(item):
               name, url, method = item
               try:
-                  with client.open(urllib.request.Request(url, method=method, headers={'User-Agent': 'Rlay-public-uptime/1'}), timeout=10) as response:
-                      assert response.status == 200
-                      if name == 'website':
-                          assert "frame-ancestors 'none'" in response.headers.get('Content-Security-Policy', '')
-                      if name == 'billing':
-                          body = response.read(4097)
-                          assert len(body) <= 4096
-                          status = json.loads(body)
-                          assert status == {'status': 'ready', 'environment': 'live', 'keyId': 'relay-2026-01', 'checkoutOpen': False}
-                      if name == 'download':
-                          assert response.headers.get('Content-Length') == '46256139'
-                          assert response.headers.get('ETag') == '"' + sha + '"'
-                  return name, True
+                  response, body = request(url, method, headers={'User-Agent': 'Rlay-public-uptime/1'}, limit=4096 if name == 'billing' else 512000)
+                  if response.status != 200:
+                      return name, False
+                  if name == 'website':
+                      return name, "frame-ancestors 'none'" in response.headers.get('Content-Security-Policy', '')
+                  if name == 'billing':
+                      return name, json.loads(body) == {'status': 'ready', 'environment': 'live', 'keyId': 'relay-2026-01', 'checkoutOpen': False}
+                  return name, response.headers.get('Content-Length') == DOWNLOAD_BYTES and response.headers.get('ETag') == '"' + DOWNLOAD_SHA + '"'
               except Exception:
-                  # Save only the public check name, never a response body or credential.
-                  return name, False
-
-          def probe(items):
+                  return name, False  # Never log response bodies, addresses or credentials.
+          
+          
+          def probe():
               with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-                  return dict(pool.map(check, items))
-
-          results = probe(checks)
-          failed = [item for item in checks if not results[item[0]]]
-          if failed:
-              time.sleep(10)
-              results.update(probe(failed))
-          for name, passed in results.items():
-              print(name + ': ' + ('passed' if passed else 'failed after retry'))
-          if not all(results.values()):
-              raise SystemExit('Rlay public availability or the closed-checkout guard needs review.')
+                  results = dict(pool.map(check, CHECKS))
+                  failed = [item for item in CHECKS if not results[item[0]]]
+                  if failed:
+                      time.sleep(10)
+                      results.update(pool.map(check, failed))
+              return results
+          
+          
+          def initial_state(now):
+              return {'schema': 1, 'healthy': True, 'notifiedHealthy': True, 'checks': {name: True for name, _, _ in CHECKS},
+                      'lastCheckedAt': now.isoformat(), 'budgetDay': now.date().isoformat(), 'attempts': 0,
+                      'pending': None, 'testReserved': False, 'lastEmail': None}
+          
+          
+          def validate_state(value):
+              # Public repository content is data, never instructions or a destination.
+              if not isinstance(value, dict) or value.keys() != initial_state(dt.datetime.now(dt.timezone.utc)).keys():
+                  raise ValueError('Invalid monitor state')
+              if value['schema'] != 1 or type(value['healthy']) is not bool or type(value['notifiedHealthy']) is not bool or type(value['testReserved']) is not bool:
+                  raise ValueError('Invalid monitor state')
+              if type(value['attempts']) is not int or not 0 <= value['attempts'] <= 4:
+                  raise ValueError('Invalid alert budget')
+              dt.date.fromisoformat(value['budgetDay']); dt.datetime.fromisoformat(value['lastCheckedAt'])
+              if value['checks'].keys() != {name for name, _, _ in CHECKS} or any(type(passed) is not bool for passed in value['checks'].values()):
+                  raise ValueError('Invalid check names')
+              pending = value['pending']
+              if pending is not None:
+                  if pending.keys() != {'key', 'createdAt', 'healthy', 'failed'} or type(pending['healthy']) is not bool or not isinstance(pending['key'], str) or len(pending['key']) != 64:
+                      raise ValueError('Invalid pending alert')
+                  if not isinstance(pending['failed'], list) or any(name not in value['checks'] for name in pending['failed']):
+                      raise ValueError('Invalid alert checks')
+                  dt.datetime.fromisoformat(pending['createdAt'])
+              last = value['lastEmail']
+              if last is not None and (last.keys() != {'id', 'at', 'kind'} or not isinstance(last['id'], str) or len(last['id']) > 100 or last['kind'] not in ('outage', 'recovery', 'test')):
+                  raise ValueError('Invalid delivery record')
+              return value
+          
+          
+          def select_alert(state, results, now):
+              if state['budgetDay'] != now.date().isoformat():
+                  state['budgetDay'], state['attempts'] = now.date().isoformat(), 0
+              state['checks'], state['healthy'], state['lastCheckedAt'] = results, all(results.values()), now.isoformat()
+              if state['pending'] is None and state['healthy'] != state['notifiedHealthy']:
+                  identity = now.isoformat() + ':' + str(state['healthy'])
+                  state['pending'] = {'key': hashlib.sha256(identity.encode()).hexdigest(), 'createdAt': now.isoformat(),
+                                      'healthy': state['healthy'], 'failed': sorted(name for name, passed in results.items() if not passed)}
+              pending = state['pending']
+              if pending is None or state['attempts'] >= 4:
+                  return None
+              age = (now - dt.datetime.fromisoformat(pending['createdAt'])).total_seconds()
+              if not 0 <= age < 23 * 3600:
+                  raise ValueError('Alert needs manual reconciliation; idempotency window has expired')
+              state['attempts'] += 1  # Persist this reservation before attempting delivery.
+              return pending
+          
+          
+          class GitHubState:
+              def __init__(self, token):
+                  self.headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Rlay-uptime'}
+                  self.url = 'https://api.github.com/repos/' + REPOSITORY + '/contents/' + STATE_PATH
+                  self.sha = None
+          
+              def load(self, now):
+                  _, body = request('https://api.github.com/repos/' + REPOSITORY, headers=self.headers)
+                  repo = json.loads(body)
+                  if repo.get('private') is not False or repo.get('full_name') != REPOSITORY:
+                      raise ValueError('Only the existing public repository is eligible')
+                  try:
+                      _, body = request(self.url + '?ref=main', headers=self.headers)
+                  except urllib.error.HTTPError as error:
+                      if error.code == 404:
+                          return initial_state(now)
+                      raise
+                  record = json.loads(body)
+                  if record.get('type') != 'file' or record.get('size', 100000) > 8192:
+                      raise ValueError('Invalid monitor state file')
+                  self.sha = record['sha']
+                  return validate_state(json.loads(base64.b64decode(record['content'])))
+          
+              def save(self, state):
+                  validate_state(state)
+                  content = json.dumps(state, indent=2).encode() + b'\n'
+                  if len(content) > 8192:
+                      raise ValueError('Monitor state exceeds bound')
+                  payload = {'message': 'Record Rlay public availability', 'branch': 'main', 'content': base64.b64encode(content).decode()}
+                  if self.sha:
+                      payload['sha'] = self.sha
+                  _, body = request(self.url, 'PUT', json.dumps(payload).encode(), self.headers | {'Content-Type': 'application/json'})
+                  self.sha = json.loads(body)['content']['sha']
+          
+          
+          def send_alert(key, alert, test=False):
+              kind = 'test' if test else 'recovery' if alert['healthy'] else 'outage'
+              subject = {'test': 'TEST — Rlay uptime alert', 'recovery': 'Rlay availability recovered', 'outage': 'Rlay availability needs review'}[kind]
+              text = ('This is the single authorized monitoring test. No outage, purchase, or payment occurred.' if test else
+                      'Public availability checks passed again.' if alert['healthy'] else 'These public checks failed twice: ' + ', '.join(alert['failed']))
+              payload = {'from': 'Rlay uptime <uptime@mail.tryrlay.com>', 'to': ['support@tryrlay.com'], 'subject': subject,
+                         'text': text + '\n\nReview: https://github.com/' + REPOSITORY + '/actions/workflows/uptime.yml\nCheckout remains closed during Paddle review.',
+                         'tags': [{'name': 'relay_kind', 'value': 'ops_alert'}]}
+              _, body = request('https://api.resend.com/emails', 'POST', json.dumps(payload).encode(),
+                                {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', 'Idempotency-Key': 'rlay-uptime-' + alert['key']})
+              identifier = json.loads(body).get('id')
+              if not isinstance(identifier, str) or not identifier or len(identifier) > 100:
+                  raise ValueError('Email acceptance is uncertain')
+              return identifier, kind
+          
+          
+          def main():
+              now = dt.datetime.now(dt.timezone.utc)
+              store = GitHubState(os.environ['GITHUB_TOKEN'])
+              state = store.load(now)
+              if os.environ.get('ALERT_DRILL') == 'true':
+                  if state['testReserved']:
+                      print('The one authorized test has already been reserved; no additional email attempted.')
+                      return
+                  if state['budgetDay'] != now.date().isoformat():
+                      state['budgetDay'], state['attempts'] = now.date().isoformat(), 0
+                  if state['attempts'] >= 4:
+                      raise ValueError('Daily attempt limit reached')
+                  state['testReserved'], state['attempts'] = True, state['attempts'] + 1
+                  store.save(state)
+                  alert = {'key': hashlib.sha256(b'rlay-single-authorized-uptime-test-v1').hexdigest(), 'healthy': True, 'failed': []}
+                  identifier, kind = send_alert(os.environ['RLAY_UPTIME_RESEND_KEY'], alert, test=True)
+                  state['lastEmail'] = {'id': identifier, 'at': now.isoformat(), 'kind': kind}
+                  store.save(state)
+                  print('One labeled test accepted by the email provider; inbox receipt must be checked separately.')
+                  return
+              results = probe()
+              alert = select_alert(state, results, now)
+              store.save(state)
+              if alert:
+                  identifier, kind = send_alert(os.environ['RLAY_UPTIME_RESEND_KEY'], alert)
+                  state['notifiedHealthy'], state['pending'] = alert['healthy'], None
+                  state['lastEmail'] = {'id': identifier, 'at': now.isoformat(), 'kind': kind}
+                  store.save(state)
+                  print('Availability change alert accepted; no repeated email while unchanged.')
+              for name, passed in results.items():
+                  print(name + ': ' + ('passed' if passed else 'failed after retry'))
+              if not all(results.values()):
+                  raise ValueError('Public availability or the closed-checkout guard needs review')
+          
+          
+          if __name__ == '__main__':
+              try:
+                  main()
+              except Exception:
+                  # Deliberately omit raw exceptions: providers can include sensitive context.
+                  raise SystemExit('Rlay monitoring needs review. No further email or payment was attempted.') from None
