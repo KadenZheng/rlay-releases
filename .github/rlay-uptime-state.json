@@ -12,5 +12,9 @@
   "attempts": 2,
   "pending": null,
   "testReserved": true,
-  "lastEmail": null
+  "lastEmail": {
+    "id": "01a1324b-1bfc-77ad-9870-03be30365c34",
+    "at": "2026-10-12T22:45:43.754302+00:00",
+    "kind": "test"
+  }
 }
