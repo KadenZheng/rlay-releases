@@ -1,0 +1,80 @@
+name: Rlay uptime
+run-name: ${{ inputs.alert_drill && 'TEST — Rlay uptime alert drill' || 'Rlay availability check' }}
+
+on:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: 'Test the failed-check notification path; does not change the website'
+        type: boolean
+        default: false
+
+permissions: {}
+concurrency:
+  group: rlay-uptime
+  cancel-in-progress: false
+
+jobs:
+  public-health:
+    # Private repositories can incur runner charges. Refuse before allocating a runner.
+    if: github.repository == 'KadenZheng/rlay-releases' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      ALERT_DRILL: ${{ inputs.alert_drill || false }}
+    steps:
+      - name: Check public website, closed checkout and signed download
+        shell: python
+        run: |
+          import concurrent.futures, json, os, ssl, time, urllib.request
+
+          if os.environ.get('ALERT_DRILL') == 'true':
+              raise SystemExit('TEST ONLY: intentional failure to verify monitoring alerts. No outage or payment occurred.')
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+
+          client = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+          sha = '68877a2d7473338c267a8210416404081082e0c727743fdfa53b833e27662887'
+          checks = [
+              ('website', 'https://tryrlay.com/', 'GET'),
+              ('billing', 'https://tryrlay.com/billing/health', 'GET'),
+              ('download', 'https://downloads.tryrlay.com/releases/0.3.1/arm64/Relay-notarized.zip', 'HEAD'),
+          ]
+
+          def check(item):
+              name, url, method = item
+              try:
+                  with client.open(urllib.request.Request(url, method=method, headers={'User-Agent': 'Rlay-public-uptime/1'}), timeout=10) as response:
+                      assert response.status == 200
+                      if name == 'website':
+                          assert "frame-ancestors 'none'" in response.headers.get('Content-Security-Policy', '')
+                      if name == 'billing':
+                          body = response.read(4097)
+                          assert len(body) <= 4096
+                          status = json.loads(body)
+                          assert status == {'status': 'ready', 'environment': 'live', 'keyId': 'relay-2026-01', 'checkoutOpen': False}
+                      if name == 'download':
+                          assert response.headers.get('Content-Length') == '46256139'
+                          assert response.headers.get('ETag') == '"' + sha + '"'
+                  return name, True
+              except Exception:
+                  # Save only the public check name, never a response body or credential.
+                  return name, False
+
+          def probe(items):
+              with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+                  return dict(pool.map(check, items))
+
+          results = probe(checks)
+          failed = [item for item in checks if not results[item[0]]]
+          if failed:
+              time.sleep(10)
+              results.update(probe(failed))
+          for name, passed in results.items():
+              print(name + ': ' + ('passed' if passed else 'failed after retry'))
+          if not all(results.values()):
+              raise SystemExit('Rlay public availability or the closed-checkout guard needs review.')
