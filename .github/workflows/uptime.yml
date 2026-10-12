@@ -63,7 +63,7 @@ jobs:
           
           
           def request(url, method='GET', data=None, headers=None, limit=16384):
-              with CLIENT.open(urllib.request.Request(url, data=data, method=method, headers=headers or {}), timeout=10) as response:
+              with CLIENT.open(urllib.request.Request(url, data=data, method=method, headers={'User-Agent': 'Rlay-uptime/1.0'} | (headers or {})), timeout=10) as response:
                   body = response.read(limit + 1)
                   if len(body) > limit:
                       raise ValueError('Response exceeds limit')
