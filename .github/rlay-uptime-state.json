@@ -9,8 +9,8 @@
   },
   "lastCheckedAt": "2026-10-12T22:41:24.983284+00:00",
   "budgetDay": "2026-10-12",
-  "attempts": 0,
+  "attempts": 1,
   "pending": null,
-  "testReserved": false,
+  "testReserved": true,
   "lastEmail": null
 }
