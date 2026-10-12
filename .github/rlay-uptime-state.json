@@ -11,6 +11,6 @@
   "budgetDay": "2026-10-12",
   "attempts": 1,
   "pending": null,
-  "testReserved": true,
+  "testReserved": false,
   "lastEmail": null
 }
