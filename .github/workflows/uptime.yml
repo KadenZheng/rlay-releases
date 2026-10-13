@@ -48,10 +48,10 @@ jobs:
           CHECKS = (
               ('website', 'https://tryrlay.com/', 'GET'),
               ('billing', 'https://tryrlay.com/billing/health', 'GET'),
-              ('download', 'https://downloads.tryrlay.com/releases/0.3.5/arm64/Relay-notarized.zip', 'HEAD'),
+              ('download', 'https://downloads.tryrlay.com/releases/0.3.6/arm64/Relay-notarized.zip', 'HEAD'),
           )
-          DOWNLOAD_BYTES = '46571363'
-          DOWNLOAD_SHA = '797d155023a300675e8ee75dc24b48e47716af16cd991b950aedf8b98f2624f0'
+          DOWNLOAD_BYTES = '46643748'
+          DOWNLOAD_SHA = 'c0c6ad0490209ca642f5ce12e42c8df9b99d9e3f3b0323bbc38ff0942c422cf7'
           
           
           class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -184,7 +184,7 @@ jobs:
               text = ('This is the single authorized monitoring test. No outage, purchase, or payment occurred.' if test else
                       'Public availability checks passed again.' if alert['healthy'] else 'These public checks failed twice: ' + ', '.join(alert['failed']))
               payload = {'from': 'Rlay uptime <uptime@mail.tryrlay.com>', 'to': ['support@tryrlay.com'], 'subject': subject,
-                         'text': text + '\n\nReview: https://github.com/' + REPOSITORY + '/actions/workflows/uptime.yml\nCheckout remains closed during Paddle review.',
+                         'text': text + '\n\nReview: https://github.com/' + REPOSITORY + '/actions/workflows/uptime.yml\nCheckout remains closed until launch checks are complete.',
                          'tags': [{'name': 'relay_kind', 'value': 'ops_alert'}]}
               _, body = request('https://api.resend.com/emails', 'POST', json.dumps(payload).encode(),
                                 {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', 'Idempotency-Key': 'rlay-uptime-' + alert['key']})
