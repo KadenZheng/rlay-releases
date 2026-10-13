@@ -48,10 +48,10 @@ jobs:
           CHECKS = (
               ('website', 'https://tryrlay.com/', 'GET'),
               ('billing', 'https://tryrlay.com/billing/health', 'GET'),
-              ('download', 'https://downloads.tryrlay.com/releases/0.3.4/arm64/Relay-notarized.zip', 'HEAD'),
+              ('download', 'https://downloads.tryrlay.com/releases/0.3.5/arm64/Relay-notarized.zip', 'HEAD'),
           )
-          DOWNLOAD_BYTES = '46256461'
-          DOWNLOAD_SHA = 'a85faeb96af0ba93b8baf54b9fcb805e5efe57954f4f08339e24d23617cf0ea8'
+          DOWNLOAD_BYTES = '46571363'
+          DOWNLOAD_SHA = '797d155023a300675e8ee75dc24b48e47716af16cd991b950aedf8b98f2624f0'
           
           
           class NoRedirect(urllib.request.HTTPRedirectHandler):
