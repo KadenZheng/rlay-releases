@@ -1,5 +1,5 @@
 name: Rlay uptime
-run-name: ${{ inputs.alert_drill && 'TEST — Rlay uptime alert drill' || 'Rlay availability check' }}
+run-name: ${{ inputs.alert_drill && 'TEST — Rlay uptime alert drill' || inputs.source == 'cloudflare_alarm' && format('Rlay availability check — cloudflare_alarm {0}', inputs.due_slot) || 'Rlay availability check' }}
 
 on:
   schedule:
@@ -10,6 +10,16 @@ on:
         description: 'Test the failed-check notification path; does not change the website'
         type: boolean
         default: false
+      source:
+        description: 'Optional external alarm attribution; metadata alone is not automatic proof'
+        type: string
+        required: false
+        default: ''
+      due_slot:
+        description: 'Optional canonical UTC alarm due time; verify against provider records'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: write
