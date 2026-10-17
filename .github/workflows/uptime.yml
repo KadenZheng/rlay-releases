@@ -58,10 +58,10 @@ jobs:
           CHECKS = (
               ('website', 'https://tryrlay.com/', 'GET'),
               ('billing', 'https://tryrlay.com/billing/health', 'GET'),
-              ('download', 'https://downloads.tryrlay.com/releases/0.3.8/arm64-kit2/Rlay-0.3.8-licensed-kit2.zip', 'HEAD'),
+              ('download', 'https://downloads.tryrlay.com/releases/0.3.8/arm64-kit3/Rlay-0.3.8-licensed-kit3.zip', 'HEAD'),
           )
-          DOWNLOAD_BYTES = '46623554'
-          DOWNLOAD_SHA = 'b74800fe5e634cf9f07227e3f324a7ebfefa7c27a8cd0e7ce85a5fd6dcb2ab84'
+          DOWNLOAD_BYTES = '41169088'
+          DOWNLOAD_SHA = '39c4257b43886dfabadc3c83f406b48df2c4904313f15507a1aab28ac88ce259'
           
           
           class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -89,7 +89,7 @@ jobs:
                   if name == 'website':
                       return name, "frame-ancestors 'none'" in response.headers.get('Content-Security-Policy', '')
                   if name == 'billing':
-                      return name, json.loads(body) == {'status': 'ready', 'environment': 'live', 'keyId': 'relay-2026-01', 'checkoutOpen': False}
+                      return name, json.loads(body) == {'status': 'ready', 'environment': 'live', 'keyId': 'relay-2026-01', 'checkoutOpen': True}
                   return name, response.headers.get('Content-Length') == DOWNLOAD_BYTES and response.headers.get('ETag') == '"' + DOWNLOAD_SHA + '"'
               except Exception:
                   return name, False  # Never log response bodies, addresses or credentials.
